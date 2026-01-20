@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Environment variables
+.env
+
+# Outputs / artifacts
+artifacts/
+plots/
+
+# OS junk
+.DS_Store
