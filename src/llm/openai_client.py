@@ -1,20 +1,34 @@
 # src/llm/openai_client.py
-# src/llm/openai_client.py
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
-from typing import Any, Dict
+from dataclasses import dataclass, field
+from typing import Any, Dict, Optional
 
 from openai import OpenAI
+
+
+class LLMResponseError(RuntimeError):
+    pass
+
+
+class LLMRefusalError(LLMResponseError):
+    pass
+
+
+class LLMIncompleteError(LLMResponseError):
+    pass
 
 
 @dataclass
 class OpenAIJSONClient:
     model: str = "gpt-4.1-mini"
+    client: Optional[Any] = field(default=None, init=False, repr=False)
 
-    def __post_init__(self):
-        self.client = OpenAI()
+    def _get_client(self):
+        if self.client is None:
+            self.client = OpenAI()
+        return self.client
 
     def json_response(
         self,
@@ -25,7 +39,7 @@ class OpenAIJSONClient:
         schema: Dict[str, Any],
         max_output_tokens: int = 800,
     ) -> Dict[str, Any]:
-        resp = self.client.responses.create(
+        resp = self._get_client().responses.create(
             model=self.model,
             instructions=instructions,
             input=user_input,
@@ -40,8 +54,24 @@ class OpenAIJSONClient:
             },
         )
 
-        text = (resp.output_text or "").strip()
-        if not text:
-            raise ValueError("Model returned empty output.")
+        if getattr(resp, "status", None) == "incomplete":
+            details = getattr(resp, "incomplete_details", None)
+            reason = getattr(details, "reason", "unknown")
+            raise LLMIncompleteError(f"Response incomplete: {reason}")
 
-        return json.loads(text)
+        for item in getattr(resp, "output", []) or []:
+            if getattr(item, "type", None) != "message":
+                continue
+            for content in getattr(item, "content", []) or []:
+                if getattr(content, "type", None) == "refusal":
+                    msg = getattr(content, "refusal", "Model refused request.")
+                    raise LLMRefusalError(msg)
+
+        text = (getattr(resp, "output_text", None) or "").strip()
+        if not text:
+            raise LLMResponseError("Model returned no structured text.")
+
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError as e:
+            raise LLMResponseError(f"Structured output was not valid JSON: {e}") from e
