@@ -1,65 +1,108 @@
 # tests/test_openai_client.py
 from types import SimpleNamespace
 
-from src.llm.openai_client import OpenAIJSONClient
+import pytest
+
+from src.llm.openai_client import (
+    LLMIncompleteError,
+    LLMRefusalError,
+    LLMResponseError,
+    OpenAIJSONClient,
+)
 
 
 class FakeResponses:
-    def __init__(self, output_text: str):
-        self._output_text = output_text
+    def __init__(self, response):
+        self._response = response
 
     def create(self, **kwargs):
-        return SimpleNamespace(output_text=self._output_text)
+        return self._response
 
 
 class FakeOpenAI:
-    def __init__(self, output_text: str):
-        self.responses = FakeResponses(output_text)
+    def __init__(self, response):
+        self.responses = FakeResponses(response)
 
 
-def test_json_response_parses_valid_schema_output():
+def make_client(response):
     client = OpenAIJSONClient(model="test-model")
-    client.client = FakeOpenAI('{"hypothesis":"x","primary_metric":"ctr","unit_of_randomization":"user","expected_direction":"up","risks":[],"assumptions":[],"notes":[]}')
+    client.client = FakeOpenAI(response)
+    return client
+
+
+SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {"x": {"type": "string"}},
+    "required": ["x"],
+}
+
+
+def test_json_response_success():
+    resp = SimpleNamespace(
+        status="completed",
+        output=[],
+        output_text='{"x":"ok"}',
+    )
+    client = make_client(resp)
     result = client.json_response(
         instructions="test",
         user_input="test",
-        schema_name="experiment_design",
-        schema={
-            "type": "object",
-            "additionalProperties": False,
-            "properties": {
-                "hypothesis": {"type": "string"},
-                "primary_metric": {"type": "string"},
-                "unit_of_randomization": {"type": "string"},
-                "expected_direction": {"type": "string"},
-                "risks": {"type": "array", "items": {"type": "string"}},
-                "assumptions": {"type": "array", "items": {"type": "string"}},
-                "notes": {"type": "array", "items": {"type": "string"}},
-            },
-            "required": [
-                "hypothesis",
-                "primary_metric",
-                "unit_of_randomization",
-                "expected_direction",
-                "risks",
-                "assumptions",
-                "notes",
-            ],
-        },
+        schema_name="test_schema",
+        schema=SCHEMA,
     )
-    assert result["primary_metric"] == "ctr"
+    assert result == {"x": "ok"}
 
 
-def test_json_response_raises_on_empty_output():
-    client = OpenAIJSONClient(model="test-model")
-    client.client = FakeOpenAI("")
-    try:
+def test_json_response_incomplete():
+    resp = SimpleNamespace(
+        status="incomplete",
+        incomplete_details=SimpleNamespace(reason="max_output_tokens"),
+        output=[],
+        output_text="",
+    )
+    client = make_client(resp)
+    with pytest.raises(LLMIncompleteError):
         client.json_response(
             instructions="test",
             user_input="test",
-            schema_name="x",
-            schema={"type": "object", "properties": {}, "required": [], "additionalProperties": False},
+            schema_name="test_schema",
+            schema=SCHEMA,
         )
-        assert False, "Expected ValueError"
-    except ValueError as e:
-        assert "empty output" in str(e).lower()
+
+
+def test_json_response_refusal():
+    resp = SimpleNamespace(
+        status="completed",
+        output=[
+            SimpleNamespace(
+                type="message",
+                content=[SimpleNamespace(type="refusal", refusal="Cannot comply")],
+            )
+        ],
+        output_text="",
+    )
+    client = make_client(resp)
+    with pytest.raises(LLMRefusalError):
+        client.json_response(
+            instructions="test",
+            user_input="test",
+            schema_name="test_schema",
+            schema=SCHEMA,
+        )
+
+
+def test_json_response_empty_output():
+    resp = SimpleNamespace(
+        status="completed",
+        output=[],
+        output_text="",
+    )
+    client = make_client(resp)
+    with pytest.raises(LLMResponseError):
+        client.json_response(
+            instructions="test",
+            user_input="test",
+            schema_name="test_schema",
+            schema=SCHEMA,
+        )
