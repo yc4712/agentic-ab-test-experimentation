@@ -21,7 +21,7 @@ def main():
     )
     csv_path = "data/sample_experiment.csv"
 
-    llm = OpenAIJSONClient(model="gpt-5.2")
+    llm = OpenAIJSONClient(model=os.getenv("OPENAI_MODEL", "gpt-4.1-mini"))
 
     design = run_designer(description, llm)
     stats = run_analyst(csv_path)
@@ -52,7 +52,8 @@ def main():
         for r in reasoning:
             print(f" - {r}")
     print("\n=== NEXT STEPS ===")
-    print(decision["next_steps"])
+    for step in decision["next_steps"]:
+        print(f" - {step}")
 
 if __name__ == "__main__":
     main()
